@@ -1,6 +1,4 @@
-# 🚨 Incident Memory
-
-### AI that remembers how you fixed it.
+![](Bottom_up.svg)
 
 **Incident Memory** is an AI-powered incident response system that turns resolved incidents into searchable knowledge and uses that experience to help solve future incidents.
 
