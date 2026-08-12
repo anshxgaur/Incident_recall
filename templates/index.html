@@ -1,0 +1,1336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>Incident Memory — Agent Brain HUD</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+                    },
+                },
+            },
+        };
+    </script>
+    <style type="text/tailwindcss">
+        /* ============================================================
+           Base
+           ============================================================ */
+        html, body { height: 100%; }
+
+        body {
+            background-color: #09090b; /* obsidian */
+            color: #e4e4e7;
+            font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+        }
+
+        ::selection { background: rgba(99, 102, 241, 0.35); color: #fff; }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 8px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+
+        .hidden { display: none !important; }
+
+        /* Keep the native dropdown list dark to match the theme */
+        select option { background: #18181b; color: #e4e4e7; }
+
+        /* Subtle grid overlay for depth (masked so it fades out downward) */
+        .grid-overlay {
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+            background-size: 48px 48px;
+            -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 30%, transparent 100%);
+            mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 30%, transparent 100%);
+        }
+
+        /* Keyboard key caps */
+        kbd {
+            @apply inline-flex items-center gap-0.5 rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-400;
+        }
+
+        /* ============================================================
+           Glass panels — the glossy core
+           ============================================================ */
+        .glass {
+            @apply relative rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-xl;
+            border-top-color: rgba(255, 255, 255, 0.18); /* glass reflection on the top edge */
+            box-shadow:
+                0 24px 70px -20px rgba(0, 0, 0, 0.85),
+                inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        /* ============================================================
+           Layout grid (structure unchanged from before)
+           ============================================================ */
+        .layout {
+            position: relative;
+            z-index: 10;
+            display: grid;
+            grid-template-columns: minmax(340px, 0.95fr) minmax(340px, 0.95fr) minmax(400px, 1.2fr);
+            gap: 20px;
+            padding: 26px 28px 48px;
+            max-width: 1800px;
+            margin: 0 auto;
+            align-items: start;
+        }
+
+        /* ============================================================
+           Buttons
+           ============================================================ */
+        .btn {
+            @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-white/10 bg-white/[0.05] px-4 py-2 text-xs font-semibold text-zinc-200 transition-all duration-200;
+        }
+        .btn:hover { @apply -translate-y-px border-white/20 bg-white/[0.09]; }
+        .btn:active { @apply translate-y-0; }
+        .btn:disabled { @apply cursor-not-allowed opacity-55; transform: none; }
+
+        .btn-sm { @apply rounded-lg px-3 py-1.5 text-[11.5px]; }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 55%, #d946ef 100%);
+            border-color: rgba(255, 255, 255, 0.18);
+            color: #fff;
+            box-shadow: 0 10px 28px -8px rgba(139, 92, 246, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+        }
+        .btn-primary:hover {
+            filter: brightness(1.12);
+            box-shadow: 0 12px 32px -8px rgba(139, 92, 246, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-ghost-cyan { color: #5eead4; }
+        .btn-ghost-cyan:hover { background: rgba(45, 212, 191, 0.1); border-color: rgba(45, 212, 191, 0.35); }
+
+        .btn-danger-ghost { color: #fda4af; }
+        .btn-danger-ghost:hover { background: rgba(251, 113, 133, 0.1); border-color: rgba(251, 113, 133, 0.35); }
+
+        /* ============================================================
+           Memory toggle pill
+           ============================================================ */
+        .memory-toggle {
+            @apply inline-flex items-center gap-2 rounded-full border border-violet-400/40 bg-violet-500/10 px-4 py-2 text-xs font-semibold text-violet-300 transition-all duration-200 hover:-translate-y-px hover:bg-violet-500/20;
+        }
+        .memory-toggle .tgl { @apply relative h-[15px] w-[26px] rounded-full bg-violet-400/40 transition-colors duration-200; }
+        .memory-toggle .tgl::after {
+            content: '';
+            position: absolute;
+            top: 2px; left: 2px;
+            width: 11px; height: 11px;
+            border-radius: 50%;
+            background: #c4b5fd;
+            transition: transform 0.2s ease;
+        }
+        .memory-toggle.active { @apply border-emerald-400/40 bg-emerald-500/10 text-emerald-300; }
+        .memory-toggle.active .tgl { @apply bg-emerald-400; }
+        .memory-toggle.active .tgl::after { transform: translateX(11px); background: #fff; }
+
+        /* ============================================================
+           Badges & tags
+           ============================================================ */
+        .sev {
+            @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] border;
+        }
+        .sev.critical { @apply border-rose-400/30 bg-rose-500/10 text-rose-300; }
+        .sev.high     { @apply border-orange-400/30 bg-orange-500/10 text-orange-300; }
+        .sev.medium   { @apply border-amber-400/30 bg-amber-500/10 text-amber-300; }
+        .sev.low      { @apply border-emerald-400/30 bg-emerald-500/10 text-emerald-300; }
+
+        .tag { @apply inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[11px] text-zinc-400; }
+
+        /* ============================================================
+           Semantic match badges (vector confidence)
+           ============================================================ */
+        .match-score { @apply inline-flex items-center gap-1.5 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 font-mono text-[10.5px] font-semibold text-cyan-300; }
+        .match-score.high { @apply border-emerald-400/40 bg-emerald-500/15 text-emerald-300; box-shadow: 0 0 14px rgba(52, 211, 153, 0.35); }
+        .match-score.mid  { @apply border-indigo-400/40 bg-indigo-500/15 text-indigo-300; box-shadow: 0 0 14px rgba(99, 102, 241, 0.35); }
+
+        .match-progress { @apply mt-1.5 h-1 w-20 overflow-hidden rounded-full bg-white/[0.06]; }
+        .match-progress .bar { @apply h-full rounded-full transition-all duration-700; }
+        .match-progress.high .bar { background: linear-gradient(90deg, #10b981, #2dd4bf); box-shadow: 0 0 8px rgba(52, 211, 153, 0.7); }
+        .match-progress.mid  .bar { background: linear-gradient(90deg, #6366f1, #a78bfa); box-shadow: 0 0 8px rgba(99, 102, 241, 0.7); }
+        .match-progress.low  .bar { background: linear-gradient(90deg, #22d3ee, #67e8f9); box-shadow: 0 0 8px rgba(34, 211, 238, 0.6); }
+
+        .mb-badge { @apply inline-flex items-center gap-1.5 rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2 py-0.5 font-mono text-[9.5px] font-semibold text-cyan-300; }
+        .mb-badge.high { @apply border-emerald-400/40 bg-emerald-500/15 text-emerald-300; box-shadow: 0 0 12px rgba(52, 211, 153, 0.4); }
+        .mb-badge.mid  { @apply border-indigo-400/40 bg-indigo-500/15 text-indigo-300; box-shadow: 0 0 12px rgba(99, 102, 241, 0.4); }
+        .mb-badge.idle { @apply border-white/10 bg-white/[0.04] text-zinc-600; }
+
+        .mb-progress { @apply mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white/[0.06]; }
+        .mb-progress .bar { @apply h-full rounded-full transition-all duration-700; }
+        .mb-progress.high .bar { background: linear-gradient(90deg, #10b981, #2dd4bf); box-shadow: 0 0 8px rgba(52, 211, 153, 0.7); }
+        .mb-progress.mid  .bar { background: linear-gradient(90deg, #6366f1, #a78bfa); box-shadow: 0 0 8px rgba(99, 102, 241, 0.7); }
+        .mb-progress.low  .bar { background: linear-gradient(90deg, #22d3ee, #67e8f9); box-shadow: 0 0 8px rgba(34, 211, 238, 0.6); }
+
+        /* ============================================================
+           Alerts
+           ============================================================ */
+        .alert {
+            @apply flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-xs leading-relaxed;
+            animation: rise 0.3s ease both;
+        }
+        .alert i { margin-top: 2px; }
+        .alert.error   { @apply border-rose-400/25 bg-rose-500/10 text-rose-300; }
+        .alert.success { @apply border-emerald-400/25 bg-emerald-500/10 text-emerald-300; }
+        .alert.info    { @apply border-cyan-400/25 bg-cyan-500/10 text-cyan-300; }
+        .alert.warn    { @apply border-amber-400/25 bg-amber-500/10 text-amber-200; }
+
+        /* ============================================================
+           Stats
+           ============================================================ */
+        .stats { @apply grid grid-cols-3 gap-2.5; }
+        .stat  { @apply rounded-xl border border-white/[0.06] bg-black/30 px-2 py-3.5 text-center; }
+        .stat .num {
+            @apply bg-gradient-to-br from-indigo-300 via-violet-300 to-fuchsia-300 bg-clip-text font-mono text-2xl font-semibold text-transparent;
+        }
+        .stat .lbl { @apply mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500; }
+
+        /* ============================================================
+           Memory Execution Trace (pipeline stepper)
+           ============================================================ */
+        .pipeline-shell { @apply relative rounded-xl border border-white/[0.08] bg-black/30 p-4; }
+        .connector-track { @apply absolute left-[10%] right-[10%] top-[18px] h-[2px] rounded-full bg-white/[0.06]; }
+        .connector-fill {
+            @apply absolute left-[10%] top-[18px] h-[2px] rounded-full;
+            background: linear-gradient(90deg, #6366f1, #8b5cf6, #2dd4bf);
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.6);
+            transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .pstep { @apply relative flex flex-col items-center gap-1.5 text-center; }
+        .pstep-circle { @apply relative grid h-9 w-9 place-items-center rounded-full border text-[13px] transition-all duration-300; }
+        .pstep.pending .pstep-circle { @apply border-white/10 bg-black/40 text-zinc-600; }
+        .pstep.active .pstep-circle {
+            @apply border-indigo-400/60 bg-indigo-500/20 text-indigo-200;
+            box-shadow: 0 0 18px rgba(99, 102, 241, 0.5);
+        }
+        .pstep.done .pstep-circle { @apply border-emerald-400/50 bg-emerald-500/15 text-emerald-300; box-shadow: 0 0 14px rgba(52, 211, 153, 0.35); }
+        .pstep-label { @apply text-[10.5px] font-semibold transition-colors duration-300; }
+        .pstep.pending .pstep-label { @apply text-zinc-600; }
+        .pstep.active .pstep-label { @apply text-indigo-200; }
+        .pstep.done .pstep-label { @apply text-emerald-300; }
+        .pstep-sub { @apply mt-0.5 font-mono text-[9px] transition-colors duration-300; }
+        .pstep.pending .pstep-sub { @apply text-zinc-700; }
+        .pstep.active .pstep-sub { @apply text-indigo-300/80; }
+        .pstep.done .pstep-sub { @apply text-emerald-400/80; }
+        .spinner-ring {
+            @apply inline-block h-4 w-4 rounded-full border-2 border-indigo-300/25 border-t-indigo-300;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ============================================================
+           Scanning laser line over the description box
+           ============================================================ */
+        .scan-line {
+            background: linear-gradient(180deg,
+                transparent,
+                rgba(103, 232, 249, 0.22) 42%,
+                rgba(103, 232, 249, 0.55) 50%,
+                rgba(103, 232, 249, 0.22) 58%,
+                transparent);
+            box-shadow: 0 0 28px rgba(103, 232, 249, 0.35);
+            animation: scan 0.9s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+        @keyframes scan {
+            0%   { transform: translateY(-110%); }
+            100% { transform: translateY(340%); }
+        }
+        .scan-active { box-shadow: 0 0 0 1px rgba(103, 232, 249, 0.35), 0 0 30px rgba(103, 232, 249, 0.12); border-radius: 12px; }
+
+        /* ============================================================
+           Command palette
+           ============================================================ */
+        .palette-item { @apply flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors duration-100; }
+        .palette-item:hover { @apply bg-white/[0.05]; }
+        .palette-item.selected {
+            background: rgba(99, 102, 241, 0.16);
+            box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.35);
+        }
+        @keyframes paletteIn {
+            from { opacity: 0; transform: translateY(-10px) scale(0.98); }
+            to   { opacity: 1; transform: none; }
+        }
+
+        /* ============================================================
+           Incident list
+           ============================================================ */
+        .incident-list { @apply flex max-h-[400px] flex-col gap-2.5 overflow-y-auto pr-1; }
+        .incident-item {
+            @apply rounded-xl border border-white/[0.08] bg-black/30 p-3.5 transition-all duration-200 hover:border-white/[0.16] hover:bg-black/40;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+        .incident-item.deleted { @apply opacity-50; }
+        .incident-item.deleted .incident-title { text-decoration: line-through; }
+
+        .incident-top    { @apply flex items-start justify-between gap-2.5; }
+        .incident-title  { @apply flex-1 text-[13px] font-semibold leading-snug text-zinc-100; }
+        .incident-time   { @apply shrink-0 pt-0.5 font-mono text-[10.5px] text-zinc-600; }
+        .incident-meta   { @apply mt-2 flex flex-wrap items-center gap-1.5; }
+        .incident-body   { @apply mt-2 text-xs leading-relaxed text-zinc-400 line-clamp-2; }
+        .incident-fix    { @apply mt-2 text-xs leading-relaxed text-emerald-300/90 line-clamp-2; }
+        .incident-fix .lbl { @apply font-mono text-[9.5px] uppercase tracking-[0.12em] text-zinc-600; }
+        .incident-actions { @apply mt-2.5 flex gap-1.5; }
+
+        /* ============================================================
+           Search results
+           ============================================================ */
+        .match-card {
+            @apply rounded-xl border border-white/[0.08] bg-black/30 p-4 transition-all duration-200 hover:border-white/[0.16] hover:bg-black/40;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+        .match-head   { @apply mb-2 flex items-start justify-between gap-2.5; }
+        .match-title  { @apply text-[13px] font-semibold leading-snug text-indigo-200 line-clamp-2; }
+        .match-meta   { @apply flex flex-wrap items-center gap-1.5; }
+        .match-desc   { @apply mt-2 text-xs leading-relaxed text-zinc-400 line-clamp-2; }
+        .match-fix    { @apply mt-2.5 rounded-r-lg border-l-2 border-emerald-400/60 bg-emerald-400/[0.06] px-3 py-2 text-xs leading-relaxed text-emerald-300/90; }
+
+        /* ============================================================
+           AI suggestion
+           ============================================================ */
+        .suggestion-box {
+            @apply relative overflow-hidden rounded-xl border border-violet-400/30 bg-gradient-to-br from-violet-500/10 via-indigo-500/[0.05] to-transparent p-4;
+        }
+        .suggestion-box::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #6366f1, #8b5cf6, #d946ef);
+        }
+        .badge-ai { @apply mb-2 inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.15em] text-violet-300; }
+        .suggestion-box p { @apply text-[13px] leading-relaxed whitespace-pre-wrap text-violet-50/90; }
+        .suggestion-actions { @apply mt-3 flex flex-wrap gap-2; }
+
+        /* ============================================================
+           Empty state
+           ============================================================ */
+        .empty-state {
+            @apply rounded-xl border border-dashed border-white/15 bg-black/20 px-5 py-8 text-center text-[13px] leading-relaxed text-zinc-400;
+        }
+        .empty-state i { @apply mb-2.5 block text-2xl text-zinc-600; }
+        .empty-state code { @apply rounded-md bg-white/[0.07] px-1.5 py-0.5 font-mono text-xs text-violet-300; }
+
+        /* ============================================================
+           Telemetry readout (system log)
+           ============================================================ */
+        .terminal {
+            background: transparent;
+            padding: 2px 4px 4px;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: 11px;
+            line-height: 1.8;
+            max-height: 230px;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+        .terminal .line { color: #a1a1aa; }
+        .terminal .line::before { content: '›'; margin-right: 7px; color: #3f3f46; }
+        .terminal .line .t { color: #6b7280; } /* dimmed timestamps (gray-500) */
+        .terminal .line.info { color: #a5b4fc; }
+        .terminal .line.success { color: #34d399; }
+        .terminal .line.success::before { content: '✓'; color: #34d399; }
+        .terminal .line.warning { color: #fcd34d; }
+        .terminal .line.warning::before { content: '!'; color: #fcd34d; }
+        .terminal .line.error { color: #fb7185; }
+        .terminal .line.error::before { content: '✕'; color: #fb7185; }
+        .terminal .cursor::after { content: '▌'; color: #6366f1; animation: blink 1s step-end infinite; }
+
+        /* ============================================================
+           Toasts
+           ============================================================ */
+        .toasts { @apply fixed bottom-6 right-6 z-[100] flex max-w-[360px] flex-col gap-2.5; }
+        .toast {
+            @apply flex items-center gap-2.5 rounded-xl border border-white/15 bg-zinc-900/95 px-4 py-3 text-[13px] font-medium text-zinc-100 backdrop-blur-xl;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            animation: toastIn 0.3s ease both;
+        }
+        .toast.out { animation: toastOut 0.3s ease both; }
+        .toast.success { border-color: rgba(52, 211, 153, 0.4); }
+        .toast.success i { color: #34d399; }
+        .toast.error { border-color: rgba(251, 113, 133, 0.4); }
+        .toast.error i { color: #fb7185; }
+        .toast.info { border-color: rgba(34, 211, 238, 0.35); }
+        .toast.info i { color: #22d3ee; }
+
+        /* ============================================================
+           Animations
+           ============================================================ */
+        @keyframes rise {
+            from { opacity: 0; transform: translateY(16px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50%      { opacity: 0.55; transform: scale(0.85); }
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(30px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+        @keyframes toastOut {
+            from { opacity: 1; }
+            to   { opacity: 0; transform: translateX(30px); }
+        }
+
+        /* ============================================================
+           Responsive
+           ============================================================ */
+        @media (max-width: 1380px) {
+            .layout { grid-template-columns: 1fr 1fr; }
+            .layout > :nth-child(3) { grid-column: 1 / -1; }
+        }
+        @media (max-width: 860px) {
+            .layout { grid-template-columns: 1fr; padding: 16px; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Ambient background: soft glowing orbs + faint grid -->
+    <div class="pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden="true">
+        <div class="absolute -left-40 -top-44 h-[36rem] w-[36rem] rounded-full bg-indigo-600/25 blur-[150px]"></div>
+        <div class="absolute -right-44 top-1/4 h-[32rem] w-[32rem] rounded-full bg-teal-500/20 blur-[150px]"></div>
+        <div class="absolute -bottom-48 left-1/3 h-[30rem] w-[30rem] rounded-full bg-purple-600/25 blur-[160px]"></div>
+        <div class="grid-overlay absolute inset-0"></div>
+        <div class="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-10%,rgba(99,102,241,0.08),transparent_70%)]"></div>
+    </div>
+
+    <!-- Top bar -->
+    <header class="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] bg-zinc-950/70 px-7 py-3.5 backdrop-blur-2xl">
+        <div class="flex items-center gap-3.5">
+            <div class="grid h-11 w-11 place-items-center rounded-xl border-t border-white/40 bg-gradient-to-br from-indigo-500 via-purple-500 to-fuchsia-500 text-white shadow-[0_10px_28px_-8px_rgba(139,92,246,0.65),inset_0_1px_0_rgba(255,255,255,0.3)]">
+                <i class="fa-solid fa-brain text-[17px]"></i>
+            </div>
+            <div class="leading-tight">
+                <div class="text-[15px] font-semibold tracking-tight text-zinc-100">Incident Memory</div>
+                <div class="font-mono text-[10px] uppercase tracking-[0.22em] text-zinc-500">Agent Brain HUD · v1.0</div>
+            </div>
+        </div>
+        <div class="flex items-center gap-2.5">
+            <div class="hidden items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.04] px-3.5 py-1.5 text-xs font-medium text-zinc-300 md:flex">
+                <span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.9)]" style="animation: pulse 2s infinite;"></span>
+                Memory Bank Online
+            </div>
+            <button class="inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs font-semibold text-zinc-300 transition-all duration-200 hover:-translate-y-px hover:border-white/20 hover:bg-white/[0.08]" id="paletteBtn" title="Command palette (⌘K)">
+                <i class="fa-solid fa-terminal text-[11px]"></i>
+                <span class="hidden lg:inline">Commands</span>
+                <kbd>⌘K</kbd>
+            </button>
+            <button class="inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3.5 py-2 text-xs font-semibold text-zinc-300 transition-all duration-200 hover:-translate-y-px hover:border-white/20 hover:bg-white/[0.08]" id="exportBtn" title="Download full memory snapshot">
+                <i class="fa-solid fa-download"></i> Export
+            </button>
+            <button class="memory-toggle active" id="memoryToggle">
+                <span class="tgl"></span>
+                <span id="memoryToggleText">Hindsight: ON</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main layout -->
+    <main class="layout">
+
+        <!-- COL 1: Intake -->
+        <section class="glass p-6" style="animation: rise 0.5s ease both;">
+            <div class="flex items-center gap-3">
+                <div class="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] border border-indigo-400/20 bg-indigo-500/15 text-indigo-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                    <i class="fa-solid fa-magnifying-glass text-[13px]"></i>
+                </div>
+                <div>
+                    <h2 class="text-sm font-semibold tracking-tight text-zinc-100">Incident Intake</h2>
+                    <p class="text-[11px] text-zinc-500">Describe the issue — find similar past incidents</p>
+                </div>
+            </div>
+
+            <form id="search-form" class="mt-6 flex flex-col gap-4">
+                <div class="flex flex-col gap-2">
+                    <label for="description" class="text-[11px] font-medium text-zinc-400">Incident description</label>
+                    <div class="relative overflow-hidden rounded-xl" id="description-wrap">
+                        <textarea id="description" placeholder="e.g. Database connection timeout during peak hours…" required
+                            class="min-h-[96px] w-full resize-y rounded-xl border border-white/[0.06] bg-black/40 px-3.5 py-3 text-[13.5px] leading-relaxed text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-indigo-500/50 focus:bg-black/50 focus:ring-1 focus:ring-indigo-500/50"></textarea>
+                        <div id="scan-line" class="scan-line pointer-events-none absolute inset-x-0 top-0 z-10 hidden h-1/2"></div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div class="flex flex-col gap-2">
+                        <label for="service" class="text-[11px] font-medium text-zinc-400">Service</label>
+                        <select id="service"
+                            class="w-full cursor-pointer appearance-none rounded-xl border border-white/[0.06] bg-black/40 px-3.5 py-3 pr-9 text-[13.5px] text-zinc-100 outline-none transition focus:border-indigo-500/50 focus:bg-black/50 focus:ring-1 focus:ring-indigo-500/50"
+                            style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E&quot;); background-repeat: no-repeat; background-position: right 12px center;">
+                            <option value="">Any service</option>
+                            {% for service in services %}
+                            <option value="{{ service }}">{{ service }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="flex flex-col gap-2">
+                        <label for="severity" class="text-[11px] font-medium text-zinc-400">Severity</label>
+                        <select id="severity"
+                            class="w-full cursor-pointer appearance-none rounded-xl border border-white/[0.06] bg-black/40 px-3.5 py-3 pr-9 text-[13.5px] text-zinc-100 outline-none transition focus:border-indigo-500/50 focus:bg-black/50 focus:ring-1 focus:ring-indigo-500/50"
+                            style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E&quot;); background-repeat: no-repeat; background-position: right 12px center;">
+                            <option value="">Any severity</option>
+                            {% for severity in severities %}
+                            <option value="{{ severity }}">{{ severity }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" id="search-btn"
+                    class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-5 py-3 text-[13px] font-semibold text-zinc-200 transition-all duration-200 hover:-translate-y-px hover:border-white/20 hover:bg-white/[0.08] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-55">
+                    <i class="fa-solid fa-bolt text-indigo-300"></i> Search Memory
+                    <kbd class="ml-1 hidden sm:inline-flex">⌘ + Enter</kbd>
+                </button>
+            </form>
+
+            <div id="search-message" class="mt-4"></div>
+            <div id="search-results" class="mt-4 flex flex-col gap-3"></div>
+        </section>
+
+        <!-- COL 2: Fix -->
+        <section class="glass p-6" style="animation: rise 0.5s ease both 0.08s;">
+            <div class="flex items-center gap-3">
+                <div class="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] border border-violet-400/20 bg-violet-500/15 text-violet-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                    <i class="fa-solid fa-wand-magic-sparkles text-[13px]"></i>
+                </div>
+                <div>
+                    <h2 class="text-sm font-semibold tracking-tight text-zinc-100">AI Fix &amp; Resolution</h2>
+                    <p class="text-[11px] text-zinc-500">Suggestion from the LLM, then store the fix</p>
+                </div>
+            </div>
+
+            <!-- Memory Execution Trace -->
+            <div id="pipeline" class="mt-6 hidden">
+                <div class="mb-2.5 flex items-center justify-between">
+                    <span class="text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Memory execution trace</span>
+                    <span id="pipeline-timer" class="font-mono text-[10px] text-zinc-600">0.00s</span>
+                </div>
+                <div class="pipeline-shell">
+                    <div class="connector-track"></div>
+                    <div class="connector-fill" id="pipeline-fill" style="width: 0%;"></div>
+                    <div id="pipeline-steps" class="grid grid-cols-4 gap-1"></div>
+                </div>
+            </div>
+
+            <div id="suggestion-area" class="mt-6">
+                <div class="empty-state">
+                    <i class="fa-regular fa-lightbulb"></i>
+                    Run a search to get an AI-suggested fix for the incident.
+                </div>
+            </div>
+
+            <form id="resolve-form" class="mt-6 flex flex-col gap-4">
+                <div class="flex flex-col gap-2">
+                    <label for="resolve-description" class="text-[11px] font-medium text-zinc-400">Issue description</label>
+                    <textarea id="resolve-description" placeholder="Describe the incident being resolved" required
+                        class="min-h-[88px] w-full resize-y rounded-xl border border-white/[0.06] bg-black/40 px-3.5 py-3 text-[13.5px] leading-relaxed text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-indigo-500/50 focus:bg-black/50 focus:ring-1 focus:ring-indigo-500/50"></textarea>
+                </div>
+
+                <!-- Hindsight memory delta banner (injected from past incident) -->
+                <div id="memory-delta" class="hidden"></div>
+
+                <div class="flex flex-col gap-2">
+                    <label for="resolve-suggestion" class="text-[11px] font-medium text-zinc-400">Resolution / fix</label>
+                    <textarea id="resolve-suggestion" placeholder="How was it fixed? Edit the AI suggestion or write your own" required
+                        class="min-h-[88px] w-full resize-y rounded-xl border border-white/[0.06] bg-black/40 px-3.5 py-3 text-[13.5px] leading-relaxed text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-indigo-500/50 focus:bg-black/50 focus:ring-1 focus:ring-indigo-500/50"></textarea>
+                </div>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div class="flex flex-col gap-2">
+                        <label for="resolve-service" class="text-[11px] font-medium text-zinc-400">Service</label>
+                        <select id="resolve-service"
+                            class="w-full cursor-pointer appearance-none rounded-xl border border-white/[0.06] bg-black/40 px-3.5 py-3 pr-9 text-[13.5px] text-zinc-100 outline-none transition focus:border-indigo-500/50 focus:bg-black/50 focus:ring-1 focus:ring-indigo-500/50"
+                            style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E&quot;); background-repeat: no-repeat; background-position: right 12px center;">
+                            <option value="">Not tagged</option>
+                            {% for service in services %}
+                            <option value="{{ service }}">{{ service }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="flex flex-col gap-2">
+                        <label for="resolve-severity" class="text-[11px] font-medium text-zinc-400">Severity</label>
+                        <select id="resolve-severity"
+                            class="w-full cursor-pointer appearance-none rounded-xl border border-white/[0.06] bg-black/40 px-3.5 py-3 pr-9 text-[13.5px] text-zinc-100 outline-none transition focus:border-indigo-500/50 focus:bg-black/50 focus:ring-1 focus:ring-indigo-500/50"
+                            style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E&quot;); background-repeat: no-repeat; background-position: right 12px center;">
+                            <option value="">Not tagged</option>
+                            {% for severity in severities %}
+                            <option value="{{ severity }}">{{ severity }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" id="resolve-btn"
+                    class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 border-t-white/30 bg-gradient-to-r from-indigo-500 to-purple-600 px-5 py-3 text-[13.5px] font-semibold text-white shadow-[0_0_20px_rgba(99,102,241,0.4),inset_0_1px_0_rgba(255,255,255,0.25)] transition-all duration-200 hover:scale-[1.02] hover:brightness-110 hover:shadow-[0_0_32px_rgba(99,102,241,0.6),inset_0_1px_0_rgba(255,255,255,0.3)] active:scale-[0.99] disabled:pointer-events-none disabled:opacity-60">
+                    <i class="fa-solid fa-floppy-disk"></i> Store &amp; Remember
+                    <kbd class="ml-1 hidden border-white/20 bg-white/10 text-white/70 sm:inline-flex">⌘ + S</kbd>
+                </button>
+            </form>
+            <div id="resolve-message" class="mt-4"></div>
+        </section>
+
+        <!-- COL 3: Memory bank -->
+        <aside class="glass p-6" style="animation: rise 0.5s ease both 0.16s;">
+            <div class="flex items-center gap-3">
+                <div class="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] border border-cyan-400/20 bg-cyan-500/15 text-cyan-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                    <i class="fa-solid fa-database text-[13px]"></i>
+                </div>
+                <div>
+                    <h2 class="text-sm font-semibold tracking-tight text-zinc-100">Memory Bank</h2>
+                    <p class="text-[11px] text-zinc-500">Everything the agent remembers — newest first</p>
+                </div>
+            </div>
+
+            <div class="stats mt-6">
+                <div class="stat"><div class="num" id="total-incidents">0</div><div class="lbl">Total</div></div>
+                <div class="stat"><div class="num" id="active-incidents">0</div><div class="lbl">Active</div></div>
+                <div class="stat"><div class="num" id="deleted-incidents">0</div><div class="lbl">Deleted</div></div>
+            </div>
+
+            <div class="relative mt-4">
+                <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-xs text-zinc-600"></i>
+                <input type="text" id="incident-filter" placeholder="Filter incidents…"
+                    class="w-full rounded-xl border border-white/[0.06] bg-black/40 py-2.5 pl-9 pr-3.5 text-[12.5px] text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-indigo-500/50 focus:bg-black/50 focus:ring-1 focus:ring-indigo-500/50">
+            </div>
+
+            <div id="incident-list" class="incident-list mt-4"></div>
+
+            <!-- Telemetry readout -->
+            <div class="mt-6 rounded-xl border border-white/[0.06] bg-black/40 p-3 backdrop-blur-xl">
+                <div class="mb-1.5 flex items-center gap-1.5 px-1">
+                    <span class="h-2.5 w-2.5 rounded-full bg-rose-500/80"></span>
+                    <span class="h-2.5 w-2.5 rounded-full bg-amber-400/80"></span>
+                    <span class="h-2.5 w-2.5 rounded-full bg-emerald-500/80"></span>
+                    <span class="ml-2 font-mono text-[9.5px] uppercase tracking-[0.18em] text-zinc-500">telemetry · system log</span>
+                </div>
+                <div class="terminal" id="terminal-log">
+                    <div class="line"><span class="t">[INIT]</span> <span class="success">✓ System ready</span><span class="cursor"></span></div>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Command palette -->
+    <div id="palette" class="hidden fixed inset-0 z-[200]" role="dialog" aria-modal="true" aria-label="Command palette">
+        <div id="paletteBackdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="relative mx-auto mt-[12vh] w-full max-w-xl rounded-2xl border border-white/10 bg-zinc-900/90 p-2 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-2xl" style="animation: paletteIn 0.18s ease both;">
+            <div class="flex items-center gap-3 border-b border-white/[0.06] px-3 pb-2">
+                <i class="fa-solid fa-magnifying-glass text-sm text-zinc-500"></i>
+                <input id="paletteInput" placeholder="Search incidents or run a command…"
+                    class="flex-1 bg-transparent py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-500">
+                <kbd>esc</kbd>
+            </div>
+            <div id="paletteResults" class="max-h-[46vh] overflow-y-auto py-1.5"></div>
+        </div>
+    </div>
+
+    <div class="toasts" id="toasts"></div>
+
+    <script>
+        const API_BASE = '/api';
+        let memoryActive = true;
+
+        // ---------- Terminal log ----------
+        function addLog(message, type = 'info') {
+            const log = document.getElementById('terminal-log');
+            const time = new Date().toLocaleTimeString([], { hour12: false });
+            const line = document.createElement('div');
+            line.className = 'line ' + type;
+            line.innerHTML = '<span class="t">[' + time + ']</span> ' + escapeHtml(message);
+            log.appendChild(line);
+            // keep the terminal capped so it doesn't grow forever
+            while (log.children.length > 80) log.removeChild(log.firstChild);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        // ---------- Toasts ----------
+        function toast(message, type = 'info') {
+            const box = document.getElementById('toasts');
+            const el = document.createElement('div');
+            el.className = 'toast ' + type;
+            const icon = type === 'success' ? 'circle-check'
+                       : type === 'error' ? 'circle-exclamation'
+                       : 'circle-info';
+            el.innerHTML = '<i class="fa-solid fa-' + icon + '"></i><span>' + message + '</span>';
+            box.appendChild(el);
+            setTimeout(() => {
+                el.classList.add('out');
+                setTimeout(() => el.remove(), 300);
+            }, 4200);
+        }
+
+        // ---------- Helpers ----------
+        function escapeHtml(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/\"/g, '&quot;');
+        }
+
+        function timeAgo(iso) {
+            // Postgres datetimes use a space separator; normalize to ISO so
+            // every engine parses them reliably.
+            const date = new Date(String(iso).replace(' ', 'T'));
+            if (isNaN(date)) return '';
+            const s = Math.floor((Date.now() - date.getTime()) / 1000);
+            if (s < 60) return 'just now';
+            if (s < 3600) return Math.floor(s / 60) + 'm ago';
+            if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+            if (s < 604800) return Math.floor(s / 86400) + 'd ago';
+            return date.toLocaleDateString();
+        }
+
+        function sevBadge(severity) {
+            const s = (severity || '').toLowerCase();
+            const known = ['critical', 'high', 'medium', 'low'];
+            if (!known.includes(s)) return '';
+            return '<span class="sev ' + s + '">' + s + '</span>';
+        }
+
+        function short(text, max) {
+            if (!text) return '';
+            return text.length > max ? text.slice(0, max - 1) + '…' : text;
+        }
+
+        function showAlert(elementId, message, type) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            if (!message) { el.innerHTML = ''; return; }
+            const icon = type === 'error' ? 'circle-exclamation'
+                       : type === 'success' ? 'circle-check'
+                       : type === 'warn' ? 'triangle-exclamation'
+                       : 'circle-info';
+            el.innerHTML = '<div class="alert ' + type + '"><i class="fa-solid fa-' + icon + '"></i><span>' + message + '</span></div>';
+        }
+
+        function setBtnLoading(btn, loading, idleHtml) {
+            btn.disabled = loading;
+            if (loading) {
+                btn.dataset.html = btn.innerHTML;
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ' + btn.dataset.text + '…';
+            } else {
+                btn.innerHTML = btn.dataset.html || idleHtml;
+            }
+        }
+
+        // ---------- Animated count-up ticker ----------
+        function animateCount(el, target) {
+            target = target || 0;
+            const from = parseInt(el.textContent, 10) || 0;
+            if (from === target) return;
+            const dur = 650;
+            const t0 = performance.now();
+            function frame(t) {
+                const p = Math.min(1, (t - t0) / dur);
+                const eased = 1 - Math.pow(1 - p, 3);
+                el.textContent = Math.round(from + (target - from) * eased);
+                if (p < 1) requestAnimationFrame(frame);
+            }
+            requestAnimationFrame(frame);
+        }
+
+        // ---------- Semantic match badge markup (real scores from Qdrant) ----------
+        function pingDot() {
+            return '<span class="relative mr-0.5 flex h-1.5 w-1.5">'
+                + '<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60"></span>'
+                + '<span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400"></span>'
+                + '</span>';
+        }
+
+        function scoreClass(score) {
+            return score >= 0.9 ? 'high' : score >= 0.8 ? 'mid' : 'low';
+        }
+
+        // Glowing badge + mini progress bar used in the search results (left pane)
+        function matchScoreHtml(pct, score) {
+            const cls = scoreClass(score);
+            const ring = score >= 0.9 ? pingDot() : '';
+            return '<div class="flex flex-col items-end gap-1.5">'
+                + '<span class="match-score ' + cls + '">' + ring + pct + '%</span>'
+                + '<div class="match-progress ' + cls + '"><div class="bar" style="width:' + pct + '%"></div></div>'
+                + '</div>';
+        }
+
+        // Glowing badge + mini progress bar used in the Memory Bank cards (right pane)
+        function mbScoreHtml(pct, score) {
+            const cls = scoreClass(score);
+            const ring = score >= 0.9 ? pingDot() : '';
+            return '<div class="mt-1 flex flex-col items-end gap-1">'
+                + '<span class="mb-badge ' + cls + '">' + ring + pct + '% Match</span>'
+                + '<div class="mb-progress ' + cls + '"><div class="bar" style="width:' + pct + '%"></div></div>'
+                + '</div>';
+        }
+
+        // ---------- Memory Execution Trace (pipeline stepper) ----------
+        const PIPELINE = [
+            { id: 'embed',      label: 'Query Embedded',   icon: 'fa-wave-square' },
+            { id: 'recall',     label: 'Hindsight Recall', icon: 'fa-circle-nodes' },
+            { id: 'rerank',     label: 'Reranking Context', icon: 'fa-arrows-split-up-and-left' },
+            { id: 'synthesize', label: 'LLM Synthesis',    icon: 'fa-wand-magic-sparkles' },
+        ];
+        const pipelineWrap = document.getElementById('pipeline');
+        const pipelineStepsEl = document.getElementById('pipeline-steps');
+        const pipelineFill = document.getElementById('pipeline-fill');
+        const pipelineTimer = document.getElementById('pipeline-timer');
+
+        function startPipeline() {
+            pipelineWrap.classList.remove('hidden');
+            pipelineStepsEl.innerHTML = PIPELINE.map(s =>
+                '<div class="pstep pending" data-step="' + s.id + '">'
+                +   '<div class="pstep-circle"><i class="fa-solid ' + s.icon + '"></i></div>'
+                +   '<div><div class="pstep-label">' + s.label + '</div>'
+                +   '<div class="pstep-sub">queued</div></div>'
+                + '</div>'
+            ).join('');
+            pipelineFill.style.width = '0%';
+            const t0 = performance.now();
+            const started = {};
+            const timers = [];
+            let stepIdx = 0;
+            let finished = false;
+            let raf;
+
+            function setProgress(p) { pipelineFill.style.width = p + '%'; }
+
+            (function tick() {
+                pipelineTimer.textContent = ((performance.now() - t0) / 1000).toFixed(2) + 's';
+                if (!finished) raf = requestAnimationFrame(tick);
+            })();
+
+            function doFail() {
+                if (finished) return; finished = true;
+                cancelAnimationFrame(raf);
+                timers.forEach(t => clearTimeout(t));
+                clearTimeout(timeoutTimer);
+                pipelineStepsEl.querySelectorAll('.pstep').forEach(s => {
+                    s.classList.remove('active');
+                    if (!s.classList.contains('done')) {
+                        s.classList.add('done');
+                        s.querySelector('.pstep-circle').innerHTML = '<i class="fa-solid fa-triangle-exclamation text-rose-400"></i>';
+                        s.querySelector('.pstep-sub').textContent = 'failed';
+                    }
+                });
+                setProgress(100);
+                setTimeout(() => pipelineWrap.classList.add('hidden'), 2600);
+            }
+
+            // safety net: never let the trace spin forever if the backend stalls
+            const timeoutTimer = setTimeout(doFail, 45000);
+
+            [80, 480, 900, 1320].forEach((d, i) => {
+                timers.push(setTimeout(() => {
+                    if (finished) return;
+                    const steps = pipelineStepsEl.querySelectorAll('.pstep');
+                    const prev = steps[stepIdx - 1];
+                    if (prev) {
+                        prev.classList.remove('active');
+                        prev.classList.add('done');
+                        prev.querySelector('.pstep-circle').innerHTML = '<i class="fa-solid fa-check"></i>';
+                        prev.querySelector('.pstep-sub').textContent = 'done';
+                        setProgress(stepIdx * 25);
+                    }
+                    const cur = steps[i];
+                    if (cur) {
+                        cur.classList.remove('pending');
+                        cur.classList.add('active');
+                        cur.querySelector('.pstep-circle').innerHTML = '<span class="spinner-ring"></span>';
+                        started[i] = performance.now();
+                    }
+                    stepIdx = i + 1;
+                }, d));
+            });
+
+            return {
+                finish(meta) {
+                    if (finished) return; finished = true;
+                    cancelAnimationFrame(raf);
+                    timers.forEach(t => clearTimeout(t));
+                    clearTimeout(timeoutTimer);
+                    const now = performance.now();
+                    pipelineStepsEl.querySelectorAll('.pstep').forEach((s, i) => {
+                        s.classList.remove('pending', 'active');
+                        s.classList.add('done');
+                        s.querySelector('.pstep-circle').innerHTML = '<i class="fa-solid fa-check"></i>';
+                        const sub = s.querySelector('.pstep-sub');
+                        const base = (meta.subs && meta.subs[s.dataset.step]) || 'ready';
+                        const ms = Math.max(0, Math.round(now - (started[i] || t0)));
+                        sub.textContent = base + ' · ' + ms + 'ms';
+                    });
+                    setProgress(100);
+                    pipelineTimer.textContent = ((now - t0) / 1000).toFixed(2) + 's';
+                    setTimeout(() => pipelineWrap.classList.add('hidden'), 3200);
+                },
+                fail: doFail
+            };
+        }
+
+        // ---------- Scanning laser over the description box ----------
+        function scanDescription() {
+            const wrap = document.getElementById('description-wrap');
+            const line = document.getElementById('scan-line');
+            line.classList.remove('hidden');
+            wrap.classList.add('scan-active');
+            setTimeout(() => {
+                line.classList.add('hidden');
+                wrap.classList.remove('scan-active');
+            }, 1000);
+        }
+
+        // ---------- Hindsight memory delta banner ----------
+        function renderMemoryDelta(matches) {
+            const el = document.getElementById('memory-delta');
+            const withFix = (matches || []).find(m => m && m.resolution);
+            if (!withFix) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+            el.classList.remove('hidden');
+            el.innerHTML =
+                '<div class="flex items-start gap-2.5 rounded-xl border border-teal-400/25 bg-gradient-to-r from-indigo-500/[0.12] to-teal-500/[0.12] px-3.5 py-3 text-xs leading-relaxed">'
+                +   '<span class="mt-0.5 text-sm">💡</span>'
+                +   '<div class="min-w-0 flex-1 text-teal-50/90">'
+                +       '<span class="font-semibold text-teal-300">Injected from Past Incident #' + withFix.id + ':</span> '
+                +       escapeHtml(short(withFix.resolution, 220))
+                +   '</div>'
+                +   '<button class="btn btn-sm shrink-0" id="applyDelta"><i class="fa-solid fa-arrow-down"></i> Apply</button>'
+                + '</div>';
+            document.getElementById('applyDelta').addEventListener('click', () => {
+                const ta = document.getElementById('resolve-suggestion');
+                const existing = ta.value.trim();
+                ta.value = existing ? existing + '\n\n' + withFix.resolution : withFix.resolution;
+                toast('Recalled fix injected into the resolution box', 'success');
+                addLog('Injected resolution from incident #' + withFix.id, 'success');
+            });
+        }
+
+        // ---------- Incident list rendering ----------
+        let allIncidents = [];
+        let matchScores = {}; // incident id -> vector score from the latest search
+
+        function renderIncidents(filter) {
+            const list = document.getElementById('incident-list');
+            const q = (filter || '').toLowerCase().trim();
+            let rows = allIncidents;
+            if (q) {
+                rows = rows.filter(r => {
+                    return (r.title + ' ' + r.description + ' ' + (r.resolution || '') + ' ' + (r.service || ''))
+                        .toLowerCase().includes(q);
+                });
+            }
+            if (rows.length === 0) {
+                if (allIncidents.length === 0) {
+                    list.innerHTML = '<div class="empty-state">'
+                        + '<i class="fa-solid fa-inbox"></i>'
+                        + 'No incidents in memory yet.<br>Seed sample data with <code>python new_ingest.py</code> '
+                        + 'or store your first fix on the right.'
+                        + '</div>';
+                } else {
+                    list.innerHTML = '<div class="empty-state">No incidents match your filter.</div>';
+                }
+                return;
+            }
+            list.innerHTML = rows.map(r => {
+                const deleted = r.status === 'deleted';
+                const score = matchScores[r.id];
+                // every card carries a similarity chip: real vector score when it matched
+                // the latest query, otherwise a muted \u201cnot recalled\u201d state
+                const badge = (score != null)
+                    ? mbScoreHtml((score * 100).toFixed(1), score)
+                    : '<span class=\"mb-badge idle\">not recalled</span>';
+                return '<div class="incident-item' + (deleted ? ' deleted' : '') + '" data-id="' + r.id + '">'
+                    + '<div class="incident-top">'
+                    +   '<div class="incident-title">' + escapeHtml(r.title || 'Untitled incident') + '</div>'
+                    +   '<div class="flex shrink-0 flex-col items-end gap-1">'
+                    +       '<div class="incident-time">' + timeAgo(r.created_at) + '</div>'
+                    +       badge
+                    +   '</div>'
+                    + '</div>'
+                    + '<div class="incident-meta">'
+                    +   sevBadge(r.severity)
+                    +   (r.service ? '<span class="tag"><i class="fa-solid fa-box"></i>' + escapeHtml(r.service) + '</span>' : '')
+                    +   (deleted ? '<span class="tag"><i class="fa-solid fa-trash"></i>deleted</span>' : '<span class="tag"><i class="fa-solid fa-circle-check"></i>resolved</span>')
+                    + '</div>'
+                    + '<div class="incident-body">' + escapeHtml(short(r.description, 160)) + '</div>'
+                    + (r.resolution ? '<div class="incident-fix"><span class="lbl">Fix · </span>' + escapeHtml(short(r.resolution, 140)) + '</div>' : '')
+                    + '<div class="incident-actions">'
+                    +   (deleted
+                            ? '<button class="btn btn-sm btn-ghost-cyan" onclick="restoreIncident(' + r.id + ')"><i class="fa-solid fa-rotate-left"></i> Restore</button>'
+                            : '<button class="btn btn-sm btn-danger-ghost" onclick="deleteIncident(' + r.id + ')"><i class="fa-solid fa-trash"></i> Delete</button>')
+                    + '</div>'
+                    + '</div>';
+            }).join('');
+        }
+
+        async function loadIncidents() {
+            try {
+                const res = await fetch(API_BASE + '/incidents');
+                const data = await res.json();
+                if (!data.ok) {
+                    toast(data.error || 'Failed to load incidents', 'error');
+                    addLog('Failed to load incidents: ' + (data.error || 'unknown error'), 'error');
+                    return;
+                }
+                allIncidents = data.incidents || [];
+                animateCount(document.getElementById('total-incidents'), data.total + data.deleted);
+                animateCount(document.getElementById('active-incidents'), data.total);
+                animateCount(document.getElementById('deleted-incidents'), data.deleted);
+                renderIncidents(document.getElementById('incident-filter').value);
+            } catch (err) {
+                toast('Could not reach the memory bank', 'error');
+                addLog('Error: ' + err.message, 'error');
+            }
+        }
+
+        async function deleteIncident(id) {
+            try {
+                const res = await fetch(API_BASE + '/incidents/' + id + '/delete', { method: 'POST' });
+                const data = await res.json();
+                if (data.ok) {
+                    toast('Incident #' + id + ' moved to deleted', 'success');
+                    addLog('Soft-deleted incident #' + id + ' — ' + (data.title || ''), 'success');
+                } else {
+                    toast(data.error || 'Delete failed', 'error');
+                }
+            } catch (err) {
+                toast('Delete failed: ' + err.message, 'error');
+            }
+            loadIncidents();
+        }
+
+        async function restoreIncident(id) {
+            try {
+                const res = await fetch(API_BASE + '/incidents/' + id + '/restore', { method: 'POST' });
+                const data = await res.json();
+                if (data.ok) {
+                    toast('Incident #' + id + ' restored', 'success');
+                    addLog('Restored incident #' + id + ' — ' + (data.title || ''), 'success');
+                } else {
+                    toast(data.error || 'Restore failed', 'error');
+                }
+            } catch (err) {
+                toast('Restore failed: ' + err.message, 'error');
+            }
+            loadIncidents();
+        }
+
+        // ---------- Command palette ----------
+        const paletteEl = document.getElementById('palette');
+        const paletteInput = document.getElementById('paletteInput');
+        const paletteResultsEl = document.getElementById('paletteResults');
+        let paletteItems = [];
+        let paletteIndex = 0;
+
+        function paletteOpen() { return !paletteEl.classList.contains('hidden'); }
+
+        function setPaletteIndex(i) {
+            paletteIndex = (i + paletteItems.length) % paletteItems.length;
+            paletteResultsEl.querySelectorAll('.palette-item').forEach((b, j) => {
+                b.classList.toggle('selected', j === paletteIndex);
+            });
+        }
+
+        function renderPalette() {
+            const q = paletteInput.value.toLowerCase().trim();
+            const actions = [
+                { icon: 'fa-bolt', title: 'Search Memory', sub: 'Embed the query and retrieve similar incidents', hint: '⌘ Enter',
+                  run: () => { closePalette(); const f = document.getElementById('search-form'); if (!document.getElementById('description').value.trim()) { document.getElementById('description').focus(); } else { f.requestSubmit(); } } },
+                { icon: 'fa-floppy-disk', title: 'Store & Remember', sub: 'Write the current fix into memory', hint: '⌘ S',
+                  run: () => { closePalette(); document.getElementById('resolve-form').requestSubmit(); } },
+                { icon: 'fa-brain', title: memoryActive ? 'Disable Hindsight' : 'Enable Hindsight', sub: 'Toggle long-term memory recall',
+                  run: () => { closePalette(); document.getElementById('memoryToggle').click(); } },
+                { icon: 'fa-download', title: 'Export Memory Snapshot', sub: 'Download the full backup JSON',
+                  run: () => { closePalette(); document.getElementById('exportBtn').click(); } },
+                { icon: 'fa-eraser', title: 'Clear Search Results', sub: 'Reset the intake pane',
+                  run: () => { closePalette(); document.getElementById('search-results').innerHTML = ''; document.getElementById('search-message').innerHTML = ''; document.getElementById('suggestion-area').innerHTML = '<div class="empty-state"><i class="fa-regular fa-lightbulb"></i>Run a search to get an AI-suggested fix for the incident.</div>'; matchScores = {}; renderIncidents(document.getElementById('incident-filter').value); } },
+            ];
+            const incidents = allIncidents
+                .filter(r => !q || (r.title + ' ' + r.description + ' ' + (r.service || '') + ' ' + (r.severity || '')).toLowerCase().includes(q))
+                .slice(0, 6)
+                .map(r => ({
+                    icon: 'fa-database',
+                    title: r.title || 'Untitled incident',
+                    sub: '#' + r.id + ' · ' + (r.service || 'untagged') + (r.severity ? ' · ' + r.severity : ''),
+                    run: () => {
+                        document.getElementById('incident-filter').value = r.title || '';
+                        renderIncidents(r.title || '');
+                        closePalette();
+                        document.querySelector('.layout > :nth-child(3)').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                }));
+            let items;
+            if (q) {
+                const fa = actions.filter(a => (a.title + ' ' + a.sub).toLowerCase().includes(q));
+                items = [...fa, ...incidents];
+            } else {
+                items = [...actions, ...incidents];
+            }
+            if (!items.length) {
+                paletteResultsEl.innerHTML = '<div class="px-4 py-6 text-center text-[13px] text-zinc-500">No commands or incidents match “' + escapeHtml(q) + '”.</div>';
+                paletteItems = [];
+                return;
+            }
+            paletteItems = items;
+            paletteIndex = 0;
+            paletteResultsEl.innerHTML = items.map((it, i) =>
+                '<button class="palette-item' + (i === 0 ? ' selected' : '') + '" data-i="' + i + '">'
+                +   '<span class="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.05] text-[11px] text-zinc-400"><i class="fa-solid ' + it.icon + '"></i></span>'
+                +   '<span class="min-w-0 flex-1"><span class="block truncate text-[13px] font-medium text-zinc-200">' + escapeHtml(it.title) + '</span>'
+                +   '<span class="block truncate text-[11px] text-zinc-500">' + escapeHtml(it.sub) + '</span></span>'
+                +   (it.hint ? '<kbd>' + it.hint + '</kbd>' : '')
+                + '</button>'
+            ).join('');
+            paletteResultsEl.querySelectorAll('.palette-item').forEach(btn => {
+                btn.addEventListener('click', () => { const it = paletteItems[+btn.dataset.i]; if (it) it.run(); });
+                btn.addEventListener('mousemove', () => setPaletteIndex(+btn.dataset.i));
+            });
+        }
+
+        function openPalette() {
+            paletteEl.classList.remove('hidden');
+            paletteInput.value = '';
+            renderPalette();
+            setTimeout(() => paletteInput.focus(), 30);
+        }
+
+        function closePalette() {
+            paletteEl.classList.add('hidden');
+            if (document.activeElement) document.activeElement.blur();
+        }
+
+        document.getElementById('paletteBtn').addEventListener('click', openPalette);
+        document.getElementById('paletteBackdrop').addEventListener('click', closePalette);
+        paletteInput.addEventListener('input', renderPalette);
+
+        // ---------- Search ----------
+        document.getElementById('search-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('search-btn');
+            btn.dataset.text = 'Running trace';
+            setBtnLoading(btn, true, '<i class="fa-solid fa-bolt"></i> Search Memory');
+
+            const description = document.getElementById('description').value;
+            const service = document.getElementById('service').value || undefined;
+            const severity = document.getElementById('severity').value || undefined;
+
+            const pipe = startPipeline();
+            scanDescription();
+            addLog('Searching: "' + description.substring(0, 48) + (description.length > 48 ? '…' : '') + '"', 'info');
+            showAlert('search-message', '', '');
+
+            try {
+                const res = await fetch(API_BASE + '/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description, service, severity, top: 5 })
+                });
+                const data = await res.json();
+
+                if (!data.ok) {
+                    pipe.fail();
+                    renderMemoryDelta([]);
+                    showAlert('search-message', escapeHtml(data.error || 'Search failed'), 'error');
+                    addLog('Search error: ' + (data.error || 'unknown'), 'error');
+                    if (data.error && data.error.indexOf('Seed it first') !== -1) {
+                        toast('Empty memory — seed with: python new_ingest.py', 'warn');
+                    }
+                    document.getElementById('suggestion-area').innerHTML =
+                        '<div class="empty-state"><i class="fa-regular fa-lightbulb"></i>No suggestion available.</div>';
+                    return;
+                }
+
+                const matches = data.matches || [];
+                const hindsightCount = (data.hindsight_memories || []).length;
+                pipe.finish({
+                    subs: {
+                        embed: 'embedded',
+                        recall: hindsightCount ? hindsightCount + ' memories' : '0 memories',
+                        rerank: matches.length + ' candidates',
+                        synthesize: data.suggestion ? 'response ready' : 'no llm'
+                    }
+                });
+
+                // Remember which memory-bank cards this query actually matched (real scores)
+                matchScores = {};
+                matches.forEach(m => { if (m && m.id != null) matchScores[m.id] = m.score; });
+                renderIncidents(document.getElementById('incident-filter').value);
+
+                let html = '';
+                if (matches.length > 0) {
+                    addLog('Found ' + matches.length + ' similar incident(s)', 'success');
+                    html = '<div class="mb-2.5 flex items-center justify-between">'
+                        + '<span class="text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Similar incidents</span>'
+                        + '<span class="font-mono text-[11px] text-cyan-300">' + matches.length + ' hit(s) · ' + hindsightCount + ' hindsight</span>'
+                        + '</div>';
+                    matches.forEach((m, i) => {
+                        const pct = m.score ? (m.score * 100).toFixed(1) : null;
+                        html += '<div class="match-card">'
+                            + '<div class="match-head">'
+                            +   '<div class="match-title">#' + (i + 1) + ' · ' + escapeHtml(m.title || short(m.description, 60)) + '</div>'
+                            +   (pct ? matchScoreHtml(pct, m.score) : '')
+                            + '</div>'
+                            + '<div class="match-meta">'
+                            +   sevBadge(m.severity)
+                            +   (m.service ? '<span class="tag"><i class="fa-solid fa-box"></i>' + escapeHtml(m.service) + '</span>' : '')
+                            + '</div>'
+                            + '<div class="match-desc">' + escapeHtml(short(m.description, 180)) + '</div>'
+                            + (m.resolution ? '<div class="match-fix"><i class="fa-solid fa-wrench"></i> ' + escapeHtml(short(m.resolution, 160)) + '</div>' : '')
+                            + '</div>';
+                    });
+                } else {
+                    addLog('No similar incidents found — this looks new', 'info');
+                    html = '<div class="alert info"><i class="fa-solid fa-circle-info"></i><span>No similar past incidents above the threshold — this incident looks new.</span></div>';
+                }
+                document.getElementById('search-results').innerHTML = html;
+
+                // Hindsight memory delta (injected resolution banner)
+                renderMemoryDelta(matches);
+
+                // Suggestion area
+                const suggestionArea = document.getElementById('suggestion-area');
+                if (data.suggestion) {
+                    suggestionArea.innerHTML =
+                        '<div class="suggestion-box">'
+                        + '<span class="badge-ai"><i class="fa-solid fa-robot"></i> AI suggestion</span>'
+                        + '<p>' + escapeHtml(data.suggestion) + '</p>'
+                        + '<div class="suggestion-actions">'
+                        +   '<button class="btn btn-sm btn-primary" id="useSuggestion"><i class="fa-solid fa-arrow-down"></i> Use this fix</button>'
+                        +   '<button class="btn btn-sm" id="regenerate"><i class="fa-solid fa-rotate"></i> Regenerate</button>'
+                        + '</div>'
+                        + '</div>';
+                    document.getElementById('useSuggestion').addEventListener('click', () => {
+                        document.getElementById('resolve-description').value = description;
+                        document.getElementById('resolve-suggestion').value = data.suggestion;
+                        document.getElementById('resolve-service').value = service || '';
+                        document.getElementById('resolve-severity').value = severity || '';
+                        toast('Suggestion loaded into the resolution form', 'success');
+                        document.getElementById('resolve-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        addLog('AI suggestion applied to resolution form', 'success');
+                    });
+                    document.getElementById('regenerate').addEventListener('click', () => {
+                        document.getElementById('search-form').dispatchEvent(new Event('submit', { cancelable: true }));
+                    });
+                    addLog('AI suggestion generated', 'success');
+                } else {
+                    suggestionArea.innerHTML =
+                        '<div class="empty-state"><i class="fa-regular fa-lightbulb"></i>No suggestion generated'
+                        + (data.llm_error ? ' — ' + escapeHtml(data.llm_error) : '') + '.</div>';
+                    if (data.llm_error) addLog('LLM error: ' + data.llm_error, 'warning');
+                }
+            } catch (err) {
+                pipe.fail();
+                renderMemoryDelta([]);
+                showAlert('search-message', escapeHtml('Error: ' + err.message), 'error');
+                addLog('Error: ' + err.message, 'error');
+            } finally {
+                setBtnLoading(btn, false, '<i class="fa-solid fa-bolt"></i> Search Memory');
+            }
+        });
+
+        // ---------- Resolve ----------
+        document.getElementById('resolve-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('resolve-btn');
+            btn.dataset.text = 'Storing';
+            setBtnLoading(btn, true, '<i class="fa-solid fa-floppy-disk"></i> Store &amp; Remember');
+
+            const description = document.getElementById('resolve-description').value;
+            const suggestion = document.getElementById('resolve-suggestion').value;
+            const service = document.getElementById('resolve-service').value || undefined;
+            const severity = document.getElementById('resolve-severity').value || undefined;
+
+            addLog('Storing resolved incident…', 'info');
+
+            try {
+                const res = await fetch(API_BASE + '/resolve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description, suggestion, service, severity, learn: memoryActive })
+                });
+                const data = await res.json();
+
+                if (data.ok) {
+                    toast('Incident stored — memory grew by one', 'success');
+                    addLog('Incident #' + (data.incident && data.incident.id) + ' embedded & stored', 'success');
+                    document.getElementById('resolve-form').reset();
+                    showAlert('resolve-message', '', '');
+                    document.getElementById('search-results').innerHTML = '';
+                    document.getElementById('memory-delta').classList.add('hidden');
+                    loadIncidents();
+                } else {
+                    showAlert('resolve-message', escapeHtml(data.error || 'Store failed'), 'error');
+                    addLog('Store error: ' + (data.error || 'unknown'), 'error');
+                }
+            } catch (err) {
+                showAlert('resolve-message', escapeHtml('Error: ' + err.message), 'error');
+                addLog('Error: ' + err.message, 'error');
+            } finally {
+                setBtnLoading(btn, false, '<i class="fa-solid fa-floppy-disk"></i> Store &amp; Remember');
+            }
+        });
+
+        // ---------- Memory toggle ----------
+        document.getElementById('memoryToggle').addEventListener('click', function () {
+            memoryActive = !memoryActive;
+            this.classList.toggle('active', memoryActive);
+            document.getElementById('memoryToggleText').textContent =
+                'Hindsight: ' + (memoryActive ? 'ON' : 'OFF');
+            addLog('Hindsight long-term memory ' + (memoryActive ? 'enabled' : 'disabled'), 'info');
+        });
+
+        // ---------- Export ----------
+        document.getElementById('exportBtn').addEventListener('click', () => {
+            addLog('Exporting memory snapshot…', 'info');
+            window.location.href = API_BASE + '/export';
+        });
+
+        // ---------- Filter ----------
+        document.getElementById('incident-filter').addEventListener('input', (e) => {
+            renderIncidents(e.target.value);
+        });
+
+        // ---------- Global keyboard shortcuts ----------
+        document.addEventListener('keydown', (e) => {
+            const mod = e.ctrlKey || e.metaKey;
+            if (mod && e.key.toLowerCase() === 'k') {
+                e.preventDefault();
+                if (paletteOpen()) closePalette(); else openPalette();
+                return;
+            }
+            // intercept Cmd/Ctrl+S everywhere (incl. palette) so the browser Save dialog never fires
+            if (mod && e.key.toLowerCase() === 's') {
+                e.preventDefault();
+                if (!paletteOpen()) {
+                    const btn = document.getElementById('resolve-btn');
+                    if (!btn.disabled) document.getElementById('resolve-form').requestSubmit();
+                }
+                return;
+            }
+            if (paletteOpen()) {
+                if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+                else if (e.key === 'ArrowDown') { e.preventDefault(); setPaletteIndex(paletteIndex + 1); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setPaletteIndex(paletteIndex - 1); }
+                else if (e.key === 'Enter') { e.preventDefault(); const it = paletteItems[paletteIndex]; if (it) it.run(); }
+                return;
+            }
+            if (e.key === 'Escape') { closePalette(); return; }
+            if (mod && e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('search-form').requestSubmit();
+            }
+        });
+
+        // ---------- Init ----------
+        loadIncidents();
+        setInterval(loadIncidents, 15000);
+        addLog('Memory bank connected — listening for incidents', 'success');
+    </script>
+</body>
+</html>

@@ -54,6 +54,7 @@ from suggest_fix import (
 )
 from backend.hindsight.client import HindsightConfig, HindsightClientWrapper
 from backend.hindsight.recall import recall_memories
+from backend.hindsight.reflect import reflect_memories
 from backend.hindsight.retain import retain_experience
 from backend.hindsight.schemas import IncidentExperience
 
@@ -143,7 +144,7 @@ def api_search():
             hindsight_memories = recall_memories(client, description, top_k=5)
             if len(hindsight_memories) >= 2 and hasattr(client, 'reflect'):
                 try:
-                    hindsight_reflection = client.reflect([m.get('incident_id') or m.get('id') for m in hindsight_memories])
+                    hindsight_reflection = reflect_memories(client, description)
                 except Exception:
                     hindsight_reflection = None
     except Exception:

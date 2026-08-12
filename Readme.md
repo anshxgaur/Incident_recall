@@ -1,129 +1,188 @@
-# Incident Memory — Demo
+# Incident Memory — A Self-Improving Incident Response Memory
 
-A compact incident memory demo that combines short-term semantic search (Qdrant) with a long-term learning layer (Hindsight). Designed as a minimal Flask app that demonstrates: ingesting incidents, semantic retrieval, LLM-driven fix suggestions, and retaining resolved incidents as long-term experiences.
+A compact, production-oriented demo that gives an on-call team an **AI-powered incident memory**. The system stores resolved incidents as semantically searchable vectors plus structured records, so every future incident is answered with evidence from the past — and every resolved incident makes the memory smarter.
 
-Status: prototype — Hindsight integration scaffolding and runtime-guarded wrapper implemented. PHASES 1–10 completed; PHASE 11 verification in progress.
+The project demonstrates a complete "memory compounds" loop:
 
-**Repository Layout**
-- `app.py`: Flask app exposing `/api/search`, `/api/resolve`, incident lifecycle endpoints, and serves the UI.
-- `suggest_fix.py`: CLI / server helper that builds the LLM prompt from Qdrant + Hindsight and calls the LLM to generate fixes.
-- `new_ingest.py`: embedding + Qdrant & Postgres wiring (existing project code).
-- `query_incidents.py`: Qdrant retrieval helpers.
-- `resolve_incident.py`: write-back logic to Postgres + Qdrant.
-- `templates/index.html`: UI — search, suggested fix, resolve, memory table.
-- `backend/hindsight/`: Hindsight client wrapper, schemas, retain/recall/reflect helpers, and a retain-historical script.
+1. A **new incident** is described (in the UI or via the API).
+2. Its text is **embedded** with the same model used at ingest time.
+3. **Qdrant** returns the most semantically similar past incidents.
+4. An **LLM** (Gemini or OpenAI) reads the current incident + the past matches and proposes a fix, citing which past incidents it matched on.
+5. The engineer **edits/approves** the fix and marks the incident resolved.
+6. The approved fix is **written back** to Postgres + Qdrant — the memory grew by one, and the next suggestion gets smarter.
 
-**High-level architecture**
+An optional **Hindsight** layer adds long-term experience storage (retain / recall / reflect) so lessons persist beyond the vector index.
 
-- Qdrant (semantic similarity) — store/search vectors for incidents.
-- Postgres (primary source of truth) — incident rows, metadata.
-- LLM (Gemini/OpenAI) — generate suggested fixes using combined context.
-- Hindsight (optional long-term memory) — persistent experiences, recall and reflection to inform future suggestions.
+**Status:** core app complete and tested (search → suggest → resolve → learn, plus backup/restore and delete/undo lifecycle). The **Hindsight long-term memory layer is wired to the real `hindsight_client` SDK** (retain / recall / reflect with dedup) and runtime-guarded, so it works when configured and the app runs fine without it (see [Hindsight integration](#hindsight-integration)).
 
-Hindsight is an optional augmentation; the app degrades gracefully if the Hindsight SDK or config is absent.
+---
 
-**Key Hindsight files**
-- `backend/hindsight/client.py` — `HindsightConfig`, `HindsightClientWrapper` (runtime-detecting, adapts to SDK shapes).
-- `backend/hindsight/schemas.py` — `IncidentExperience` dataclass and `to_dict()`.
-- `backend/hindsight/retain.py` — `retain_experience()` helper.
-- `backend/hindsight/recall.py` — `recall_memories()` helper.
-- `backend/hindsight/reflect.py` — reflect helper stub.
-- `backend/hindsight/retain_historical.py` — batch retain script with dedup checks.
+## Repository layout
 
-Environment variables
+| File / dir | Role |
+|---|---|
+| `app.py` | Flask web app: serves the UI and all HTTP API endpoints (search, resolve, export/import, delete/restore/purge). |
+| `new_ingest.py` | Seeding pipeline: inserts `seed_incidents.json` into Postgres, embeds each incident, upserts vectors into Qdrant. Also owns shared DB/embedding/Qdrant setup used by every other module. |
+| `query_incidents.py` | Retrieval helpers: embed a query → Qdrant semantic search → enrich hits with full Postgres records. |
+| `suggest_fix.py` | LLM fix generation: builds a structured prompt (current incident + Qdrant matches + optional Hindsight memories/reflection) and calls Gemini or OpenAI. |
+| `resolve_incident.py` | Write-back: stores an approved fix into Postgres + Qdrant with commit-after-upsert ordering, so the memory compounds. |
+| `memory_backup.py` | Full snapshot export/import (rows + vectors + embedding metadata) with id-sequence re-sync. |
+| `init_db.py` | Minimal one-off script to create the `incidents` schema. |
+| `templates/index.html` | The "Agent Brain HUD" UI: intake form, live pipeline trace, AI fix box, memory bank, command palette, telemetry log, export button. |
+| `backend/hindsight/` | Wired Hindsight long-term memory layer: config + SDK wrapper, `IncidentExperience` schema, retain (with dedup) / recall / reflect helpers, batch retain script, and `test_wiring.py` unit tests. |
+| `seed_incidents.json` | 12 realistic seed incidents (payments, checkout, auth, database, cache, …) covering recurring failure patterns. |
+| `e2e_walkthrough.py` | End-to-end test through the real API proving memory compounds (2 full cycles). |
+| `test_memory_lifecycle.py` | Lifecycle tests: export/import, soft-delete, restore, purge, idempotency, id-sequence safety. |
+| `incidents_backup.json` | A previously exported memory snapshot. |
+| `detect_hindsight_sdk.py` | Diagnostic script that reports which Hindsight SDK modules are importable. |
+| `backend/hindsight/test_wiring.py` | Unit tests for the Hindsight wiring (runs against a faked SDK — no network). |
+| `document (1).pdf` | Project article: a ~1100-word technical overview of the system (generated PDF). |
+| `.env.example` | Environment-variable template (copy to `.env`). ⚠️ It currently contains real-looking credentials — rotate/replace before sharing this repo. |
 
-Required for core app (existing project):
-- `DATABASE_URL` or `PGHOST`/`PGUSER`/`PGPASSWORD` etc. — Postgres connection
-- `QDRANT_URL`, `QDRANT_API_KEY` — Qdrant connection (if applicable)
-- `GEMINI_API_KEY` / `OPENAI_API_KEY` — LLM provider keys (one required for generation)
+---
 
-Hindsight-specific (optional):
-- `HINDSIGHT_API_URL` — base URL for Hindsight API
-- `HINDSIGHT_API_KEY` — API key for Hindsight
-- `HINDSIGHT_BANK_ID` — bank/namespace id used by Hindsight
+## Architecture
 
-Important: Hindsight credentials are read server-side only and are never exposed to the frontend.
+```
+                    ┌──────────────────────────────────────────────┐
+                    │  Flask app (app.py) + Agent Brain HUD (UI)    │
+                    └───────────────┬──────────────────────────────┘
+                                    │
+              embed                 │                     LLM prompt
+   ┌─────────────────────┐          ▼          ┌──────────────────────┐
+   │  Embedding (Gemini   │   ┌───────────┐    │  LLM (Gemini / OpenAI)│
+   │  or OpenAI)          │   │ Qdrant    │    │  → suggested fix      │
+   └─────────────────────┘   │ vectors   │    └──────────┬───────────┘
+            ▲                └─────┬─────┘               │ approved fix
+            │                      │                     ▼
+   ┌────────┴─────────┐   ┌────────┴─────────┐   ┌───────────────┐
+   │  Postgres        │   │  Qdrant          │   │  Hindsight    │
+   │  (source of      │   │  (semantic       │   │  (long-term   │
+   │   truth, rows)   │   │   similarity)    │   │   memory)     │
+   └──────────────────┘   └──────────────────┘   └───────────────┘
+```
 
-Quickstart (local)
+- **Postgres** — primary source of truth for incident records (`incidents` table: title, description, root cause, resolution, service, severity, status, created_at). Supabase-compatible (`DATABASE_URL`).
+- **Qdrant** — vector index (cosine similarity). Points are keyed by the same id as the Postgres rows so the two stores always stay addressable. The `incidents` collection holds 768-dim vectors from `gemini-embedding-001` (or 1536-dim from OpenAI's `text-embedding-3-small`).
+- **LLM** — generates evidence-based fix suggestions. Gemini (`gemini-3.6-flash`, free tier) or OpenAI (`gpt-4.1-mini`). Provider auto-detected from keys in `.env`.
+- **Hindsight (optional)** — persistent experience bank for retain/recall/reflect. Guarded so the app runs fine without it.
 
-1. Create a Python virtualenv and install dependencies (project has a minimal `requirements.txt`).
+### Embedding & LLM providers
+
+- Embeddings default to **Gemini** (free) and fall back to **OpenAI** if only `OPENAI_API_KEY` is set. Force with `EMBED_PROVIDER=gemini|openai`. Model names can be overridden (`GEMINI_EMBED_MODEL`).
+- Generation mirrors this: `GEN_PROVIDER=gemini|openai` (default `auto`), models overridable via `GEN_LLM_MODEL` / `OPENAI_LLM_MODEL`.
+- Transient embedding/LLM failures are retried with exponential backoff, and helpful troubleshooting hints are printed when keys, quotas, or retired model names cause failures.
+
+---
+
+## Quickstart
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # or .venv\Scripts\Activate.ps1 on Windows PowerShell
+source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+
+# 1. Configure .env (copy .env.example; add your keys)
+#    - DATABASE_URL (Postgres / Supabase)
+#    - QDRANT_URL (+ QDRANT_API_KEY for Qdrant Cloud)
+#    - GEMINI_API_KEY (free, recommended) or OPENAI_API_KEY
+#    - Optional: HINDSIGHT_API_URL (https://api.hindsight.vectorize.io for the cloud)
+#                HINDSIGHT_API_KEY / HINDSIGHT_BANK_ID
+#                HINDSIGHT_REFLECT_MISSION / HINDSIGHT_RETAIN_MISSION (bank missions)
+
+# 2. Seed the memory (Postgres rows + Qdrant vectors)
+python new_ingest.py                 # --check and --test-embed are safe dry-runs
+
+# 3. Start the app
+python app.py                        # http://127.0.0.1:5000  (--port 5001 to change)
 ```
 
-2. Configure environment variables (example `.env` or export in shell). For Hindsight tests set these only if you have a matching SDK/service:
+Then use the UI to search, edit/approve an AI fix, and store it — watch the incident count tick up as the memory compounds.
 
-```powershell
-$env:HINDSIGHT_API_URL='https://api.hindsight.example'
-$env:HINDSIGHT_API_KEY='YOUR_KEY'
-$env:HINDSIGHT_BANK_ID='bank-id'
-```
-
-3. Start the app:
+### CLI tools
 
 ```bash
-python app.py
+python query_incidents.py "payment service timing out during flash sale"   # search only
+python suggest_fix.py "checkout 504s under traffic spike"                  # search + LLM fix
+python suggest_fix.py --dry-run "payment api 504s"                          # prompt, no LLM call
+python resolve_incident.py "db connection exhaustion" --resolution "bumped pool to 100"
+python memory_backup.py export incidents_backup.json                        # full snapshot
+python memory_backup.py import incidents_backup.json                        # restore (upsert)
+python memory_backup.py check                                               # store counts
 ```
 
-4. Use the UI at `http://127.0.0.1:5000` to run searches, edit/accept suggestions, and mark incidents resolved.
+---
 
-Testing & verification (end-to-end)
+## API endpoints
 
-- Quick Hindsight wrapper check (no SDK):
+| Method & path | Purpose |
+|---|---|
+| `GET /` | The Agent Brain HUD page. |
+| `GET /api/incidents` | All incidents (newest first) + active/deleted counts. |
+| `POST /api/search` | `{description, service?, severity?, top?, threshold?}` → ranked `matches` + LLM `suggestion` (+ optional `hindsight_memories`/`hindsight_reflection`). |
+| `POST /api/resolve` | `{description, suggestion, service?, severity?, learn?}` → stores the fix; `learn: true` also retains into Hindsight. |
+| `GET /api/export` | Download the full memory snapshot (rows + vectors + embedding metadata). |
+| `POST /api/import` | Restore a snapshot (upsert/merge, never a wipe). |
+| `POST /api/incidents/<id>/delete` | Soft delete: drops the Qdrant point, marks the row `deleted` (undoable). |
+| `POST /api/incidents/<id>/restore` | Undo: re-embeds and re-upserts the point. |
+| `POST /api/incidents/<id>/purge` | Permanent delete from both stores. |
+
+Consistency notes: writes are ordered so the two stores can never silently desync in the dangerous direction (e.g. restore marks the row resolved *before* upserting the point; ingest upserts Qdrant *before* committing Postgres). Every module reuses the same `.env`-driven setup from `new_ingest.py`, so there is no duplicated connection/config code.
+
+---
+
+## The UI — Agent Brain HUD
+
+A dark, glassmorphic single-page UI (`templates/index.html`, Tailwind CSS) with:
+
+- **Incident Intake** — describe the issue (with a scanning-laser effect), pick service/severity, run a semantic search.
+- **Memory Execution Trace** — an animated 4-step pipeline readout (embed → Hindsight recall → rerank context → LLM synthesis) with per-step timing.
+- **AI Fix & Resolution** — the LLM suggestion with a "recalled fix injected" banner from the best past match; edit and store.
+- **Memory Bank** — every incident with live similarity chips (real Qdrant scores), severity badges, filter, delete/restore.
+- **Command palette (⌘K)**, **Export** button, telemetry log, toasts, and a Hindsight on/off toggle.
+
+---
+
+## Testing & verification
 
 ```bash
-python backend/hindsight/test_client.py
+python e2e_walkthrough.py            # proves memory compounds across 2 real API cycles
+python e2e_walkthrough.py --reset    # first removes UI-resolved rows, then runs
+python test_memory_lifecycle.py      # export/import, delete/restore/purge, idempotency
+python memory_backup.py check        # Postgres vs Qdrant counts
 ```
 
-- Quick Hindsight wrapper check (dummy env vars, SDK likely absent):
+`e2e_walkthrough.py` runs two cycles (payments/flash-sale → related checkout incident, and notification OOMKill → related reporting OOMKill). Each cycle resolves an incident and then verifies the very next related query retrieves and cites it. `test_memory_lifecycle.py` covers snapshot export/import (with original ids and vectors), soft-delete, restore, purge, import idempotency, and `SERIAL` sequence safety.
 
-PowerShell:
-```powershell
-$env:HINDSIGHT_API_URL='https://example.local'
-$env:HINDSIGHT_API_KEY='fake-key'
-$env:HINDSIGHT_BANK_ID='bank-1'
-python backend\hindsight\test_client.py
-```
+---
 
-- Manual end-to-end sequence (recommended):
+## Hindsight integration
 
-1. Start the server: `python app.py`.
-2. TEST 1 — Search (captures Qdrant matches + Hindsight recall):
+The long-term memory layer lives in `backend/hindsight/` and is wired to the installed `hindsight_client` SDK (`Hindsight(base_url=…, api_key=…)` with `retain` / `recall` / `reflect`):
 
-```powershell
-$body = @'
-{"description":"Database connection exhaustion","top":5,"threshold":0.2}
-'@
-curl -s -X POST http://127.0.0.1:5000/api/search -H "Content-Type: application/json" -d $body
-```
+- `client.py` — `HindsightConfig` (kwargs override env: `HINDSIGHT_API_URL`, `HINDSIGHT_API_KEY`, `HINDSIGHT_BANK_ID`) + `HindsightClientWrapper` (`available()`, `connect()` with best-effort bank creation, `retain()` / `recall()` / `reflect()`). Degrades to no-op when the SDK or config is missing.
+- `schemas.py` — `IncidentExperience` dataclass (incident_id, title, service, severity, status, description, root cause, resolution, outcome, lesson) + `to_dict()`.
+- `retain.py` — `retain_experience()` renders the experience as natural-language memory content **plus structured metadata**, tags it (`incident`, `service:*`, `severity:*`), and **dedupes by retaining each incident under `document_id=incident-<id>` with `update_mode="replace"`** — re-resolving an incident replaces its memory instead of duplicating it.
+- `recall.py` — `recall_memories(client, description, top_k)` calls `client.recall(...)` and maps results onto the fields the LLM prompt expects (incident_id, service, severity, outcome, root cause, resolution, lesson).
+- `reflect.py` — `reflect_memories(client, query)` calls `client.reflect(...)` (query-driven, with `include_facts=True`) and returns `{ok, insights, based_on}` for the prompt.
+- `retain_historical.py` — batch script that loads all non-deleted incidents from Postgres and retains them (`--dry-run`, `--no-dedup` options).
+- `test_wiring.py` — 16 unit tests that verify the wiring against a faked SDK (no network): `python backend/hindsight/test_wiring.py`.
 
-3. TEST 2 — Resolve (send `learn: true` to retain into Hindsight):
+The `/api/search` endpoint recalls Hindsight memories and, when ≥ 2 memories match, asks Hindsight to reflect and appends the synthesized insights to the LLM prompt. `/api/resolve` retains when the UI's Hindsight toggle is ON (`learn: true`). All Hindsight calls are wrapped in `try/except`, so the core search/suggest/resolve loop keeps working with Qdrant + LLM even when Hindsight is down.
 
-```powershell
-$body = @'
-{"description":"Database connection exhaustion","suggestion":"Restart DB and check replication slots","service":"database","severity":"high","learn": true}
-'@
-curl -s -X POST http://127.0.0.1:5000/api/resolve -H "Content-Type: application/json" -d $body
-```
+**Going live:** set `HINDSIGHT_API_URL=https://api.hindsight.vectorize.io`, a real `HINDSIGHT_API_KEY` (cloud credits: promo code `MEMHACK89`), and your `HINDSIGHT_BANK_ID` in `.env`, then run `python backend/hindsight/retain_historical.py` to seed the bank, and restart the app. The bank is auto-created with incident-response retain/reflect missions.
 
-4. TEST 3 — New similar incident: call `/api/search` again and verify `hindsight_memories` contains the retained item and that LLM output references it.
+---
 
-Notes about behavior, limitations, and known gaps
+## Known gaps & next steps
 
-- Hindsight calls are optional and guarded. If the Hindsight SDK or configuration is missing, the app continues to use Qdrant + LLM only.
-- `retain_historical.py` includes a deduplication step (it recalls by `incident_id` before retaining). However, the live `/api/resolve` retain path does **not** perform a dedup check — duplicates are possible on repeated resolve calls (frontend attempts to prevent double-clicks but that is not a strong guarantee).
-- The current `/api/resolve` flow sets `outcome='resolved'` when retaining. There is no UI/API field to indicate failures or partial outcomes; the schema supports an `outcome` field but the UI must be extended to populate non-success outcomes.
-- Reflection (synthesis) is invoked only when multiple memories are returned and the SDK exposes a reflect-like method. Otherwise reflection is skipped.
+- **MEDIUM** — Capture richer resolution outcomes (failed / partial / success) at resolve time and propagate them to Hindsight (schema already supports `outcome`).
+- **MEDIUM** — Add integration tests that run against a real/local Hindsight bank (current tests use a faked SDK), and tests that mock Qdrant.
+- **LOW** — Expose per-incident Hindsight memories in the UI beyond the count badge.
+- **LOW** — Document the exact Hindsight SDK adapter mapping and an example bank schema.
 
-TODO / Next work (recommended)
-- Add dedup protection to `/api/resolve` to match `retain_historical` logic (HIGH priority).
-- Add structured outcome capture (failed/partial/success) at resolve time and propagate to Hindsight (MEDIUM).
-- Add unit/integration tests that mock the Hindsight client for recall/reflect/retain behavior (MEDIUM).
-- Add README documentation for Hindsight SDK adapters and mapping of expected SDK method names (LOW).
+---
 
-Contact / author
+## Contact / author
 
-This README was generated by an automated assistant while integrating Hindsight as a long-term memory layer. If you want follow-up changes (tests, dedupe, outcome UI), tell me which to implement next.
+This README was updated to reflect the current state of the project. Want the Hindsight layer completed, more seed scenarios, or UI/API polish? Just say which to implement next.

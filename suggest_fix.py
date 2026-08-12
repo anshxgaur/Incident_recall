@@ -50,6 +50,7 @@ from new_ingest import GEMINI_API_KEY, OPENAI_API_KEY
 from query_incidents import retrieve_similar_incidents, validate_collection
 from backend.hindsight.client import HindsightConfig, HindsightClientWrapper
 from backend.hindsight.recall import recall_memories
+from backend.hindsight.reflect import reflect_memories
 
 # --- Configuration (from .env) --------------------------------------------
 # LLM generation provider: "gemini" | "openai" | "auto" (default: auto).
@@ -136,9 +137,10 @@ def build_user_prompt(new_incident: str, past: list[dict], hindsight_memories: l
             )
 
     if hindsight_reflection and hindsight_reflection.get('ok'):
-        lines.append("\nHINDSIGHT REFLECTION (synthesized lessons):")
-        insights = hindsight_reflection.get('insights') or hindsight_reflection.get('summary') or hindsight_reflection
-        lines.append(str(insights))
+        insights = hindsight_reflection.get('insights') or hindsight_reflection.get('summary')
+        if insights:
+            lines.append("\nHINDSIGHT REFLECTION (synthesized lessons):")
+            lines.append(str(insights))
 
     lines.append(
         "\nRespond in this format (clearly label each section):\n"
@@ -309,7 +311,7 @@ def main() -> None:
             # reflect only when multiple memories were returned
             if len(hindsight_memories) >= 2 and hasattr(hindsight_client, 'reflect'):
                 try:
-                    hindsight_reflection = hindsight_client.reflect([m.get('incident_id') or m.get('id') for m in hindsight_memories])
+                    hindsight_reflection = reflect_memories(hindsight_client, query_text)
                 except Exception:
                     hindsight_reflection = None
     except Exception:

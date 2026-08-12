@@ -6,3 +6,8 @@ venv/
 .venv/
 __pycache__/
 *.pyc
+*.log
+chrome/.env
+.venv/
+*.log
+__pycache__/
