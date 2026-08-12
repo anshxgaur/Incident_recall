@@ -1,8 +1,11 @@
 ![](Bottom_up.svg)
 
-**Incident Memory** is an AI-powered incident response system that turns resolved incidents into searchable knowledge and uses that experience to help solve future incidents.
+<div align="center">
+  
+<p align="center">
+  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&weight=700&size=50&duration=3000&pause=1000&color=00BFFF&center=true&vCenter=true&width=1000&lines=Every+incident+you+resolve;Makes+the+next+one+easier" alt="Typing SVG">
+</p>
 
-> **Every incident you resolve makes the next one easier.**
 
 <p align="center">
   <img src="docs/demo.gif" width="900" alt="Incident Memory Demo"/>
