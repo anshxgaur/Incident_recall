@@ -1,0 +1,7 @@
+hindsight-client
+qdrant-client
+psycopg[binary]
+python-dotenv
+google-genai
+openai
+flask
